@@ -11,7 +11,9 @@ from mojo.UI import UpdateCurrentGlyphView
 from mojo.roboFont import OpenWindow, version, CurrentGlyph, CurrentFont
 from mojo.extensions import getExtensionDefault, setExtensionDefault, getExtensionDefaultColor, setExtensionDefaultColor
 
+# @@@
 from outlinePen import OutlinePen
+from outlineFitterPen import OutlineFitterPen
 
 outlinePaletteDefaultKey = "com.typemytype.outliner"
 
@@ -19,7 +21,9 @@ outlinePaletteDefaultKey = "com.typemytype.outliner"
 class OutlinerPalette(BaseWindowController):
 
     def __init__(self):
-        self.w = FloatingWindow((300, 535), "Outline Palette")
+        self.w = FloatingWindow((300, 560), "Outline Palette")
+        
+        self.outlinePenClass = OutlinePen
 
         y = 5
         middle = 135
@@ -158,7 +162,7 @@ class OutlinerPalette(BaseWindowController):
 
         self.previewCallback(self.w.preview)
 
-        b = -80
+        b = -105
         self.w.apply = Button((-70, b, -10, 22), "Expand", self.expand, sizeStyle="small")
         self.w.applyNewFont = Button((-190, b, -80, 22), "Expand Selection", self.expandSelection, sizeStyle="small")
         self.w.applySelection = Button((-290, b, -200, 22), "Expand Font", self.expandFont, sizeStyle="small")
@@ -171,6 +175,14 @@ class OutlinerPalette(BaseWindowController):
         self.w.filterDoubles = CheckBox((10, b, -10, 22), "Filter Double points", sizeStyle="small",
                                 value=getExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "filterDoubles"), True),
                                 callback=self.parametersTextChanged)
+                                
+        b += 25
+        self.w.useFitterPen = CheckBox((10, b, -10, 22), "Use the OutlineFitterPen", sizeStyle="small",
+                                value=getExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "useFitterPen"), False),
+                                callback=self.parametersTextChanged)
+        if getExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "useFitterPen"), True):
+            self.outlinePenClass = OutlineFitterPen
+            
         self.setUpBaseWindowBehavior()
 
         addObserver(self, "drawOutline", "drawBackground")
@@ -218,7 +230,7 @@ class OutlinerPalette(BaseWindowController):
         drawInner = self.w.addInner.get()
         drawOuter = self.w.addOuter.get()
 
-        pen = OutlinePen(glyph.getParent(),
+        pen = self.outlinePenClass(glyph.getParent(),
                             tickness,
                             contrast,
                             contrastAngle,
@@ -311,6 +323,13 @@ class OutlinerPalette(BaseWindowController):
         setExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "preserveComponents"), preserveComponents)
         filterDoubles = bool(self.w.filterDoubles.get())
         setExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "filterDoubles"), filterDoubles)
+        
+        # @@@
+        useFitterPen = bool(self.w.useFitterPen.get())
+        setExtensionDefault("%s.%s" % (outlinePaletteDefaultKey, "useFitterPen"), useFitterPen)
+        if useFitterPen:
+            self.outlinePenClass = OutlineFitterPen
+        else: self.outlinePenClass = OutlinePen
 
         miterLimit = int(self.w.miterLimit.get())
         if self.w.connectmiterLimit.get():
