@@ -19,6 +19,7 @@ from defcon import Glyph
 from math import sqrt, cos, sin, acos, asin, degrees, radians, pi
 
 
+
 def roundFloat(f):
     error = 1000000.
     return round(f*error)/error
@@ -410,25 +411,47 @@ class OutlineFitterPen(BasePen):
         self.outerCurrentPoint = p3 + self.pointClass(cos(a2), sin(a2)) * tickness2
         outerPoints.append(self.outerCurrentPoint)
         
-        # @@@ Could use some improvement here, still glitches out at some sharp inflection points
         # Determine if a curve in/out of a BCP is rotating clockwise or counterclockwise
-        # Compare the angle of the BCP vector and a new vector from the anchor to a split point
-        splits = splitCubicAtT(self.prevPoint, p1, p2, p3, 0.2, 0.8)
-        split0loc = self.pointClass(*splits[0][-1])
-        split1loc = self.pointClass(*splits[1][-1])
-        # Find angles
-        bcp0angle = self.prevPoint.angle(p1)
-        split0angle = self.prevPoint.angle(split0loc)
-        bcp1angle = self.pointClass(pt3).angle(p2)
-        split1angle = self.pointClass(pt3).angle(split1loc)
-        # Find the difference between the angles. Flipping the bcp1 to match for contour direction (in vs out)
-        # Use the difference to set if the BCPs are CW or CCW
+        # Compare vectors of the point to the bcp and the point to the next point
+        vBcp0 = self.prevPoint - p1
+        vNext0 = self.prevPoint - p3
+        vBcp1 = self.pointClass(pt3) - p2
+        vNext1 = self.pointClass(pt3) - self.prevPoint
+        # Find which way the vector is rotating by looking at the sign of the dot product
+        dot0 = vBcp0[0] * vNext0[1] - vBcp0[1] * vNext0[0]
+        dot1 = vBcp1[0] * vNext1[1] - vBcp1[1] * vNext1[0]
+        # Find the angles
+        # ang0 = self.prevPoint.angle(p1)
+        # ang1 = self.pointClass(pt3).angle(p2)
+        # print(ang0, ang1)
         dir0 = 1
         dir1 = 1
-        if split0angle - bcp0angle < 0:
+        if dot0 < 0:
             dir0 = -1
-        if split1angle - bcp1angle < 0: # poosite direction for bcpIn
+        if dot1 < 0:
             dir1 = -1
+            
+        # print(dot0, dot1)
+            
+        """
+        # If the onCurves are closer to each other than 2x the thickness, reverse the direction of the inner curve
+        angle = self.prevPoint.angle(p3)
+        distance = self.prevPoint.distance(p3)
+        thickness = self.getThickness(angle)
+        reverseInner = False
+        #print(distance, thickness)
+        if distance < thickness * 2:
+            reverseInner = True
+        # @@@ Do this differently, it's not helping
+            
+            
+        Two bugs (maybe related)
+        
+        - When the on-curves are closer to each other than 2x the offset, need to reverse the direction on the inner handles
+        - When the BCPs are in the same direction and are on top of each other, the curve asymmetrically sets the direction (wrong)
+        
+        """
+
             
         # Flatten the original curve
         flatPoints = flattenCurve(originalPoints)
@@ -515,72 +538,28 @@ class OutlineFitterPen(BasePen):
     
     # fit curve
     
-    def fitCurve(self, pts, flatPts, dir0, dir1):
-        # pts is a list of four points defining a curve
-        # Use three sample points along the curve to move the BCPs in directions dir0 and dir1 
-        # until the sampled points average out to the correct distance from flatPoints
-
-        totalPasses = 0
-        prevPts = []
-
-        while True:
-    
-            totalPasses += 1
-            # Limit this so it doesn't run forever
-            if totalPasses > 1000:
-                # print("Total passes exceeded")
-                break
+    def _testCurve(self, pts, flatPts, f0, f1):
+        # Normalize and scale the BCPs
+        scaled0 = (pts[1] - pts[0]) * f0
+        pts[1] = pts[1] + scaled0
+        dist1 = abs(self.pointClass(pts[3]).distance(pts[2]))
+        scaled1 = (pts[3] - pts[2]) * f1
+        pts[2] = pts[2] + scaled1
+        # Split at a few locations
+        splitFactors = [0.33, 0.5, 0.66]
+        newSplit = splitCubicAtT(pts[0], pts[1], pts[2], pts[3], *splitFactors)
+        newSplitLocs = [self.pointClass(pts[-1]) for pts in newSplit]
+        newSplitLocs = newSplitLocs[:-1]
+        # Measure these splits back to the flattened original segment
+        totalDiff = 0
+        for loc in newSplitLocs:
+            closestLoc, closestDist = self.findClosest(loc, flatPts)
+            angle = loc.angle(self.pointClass(closestLoc))
+            expectedDistance = self.getThickness(angle)
+            diff = expectedDistance - closestDist
+            totalDiff += diff
+        return pts, totalDiff
         
-            f = 0.01
-            # positive or negative factor, depending on the direction the curve is turning
-            if dir0 > 0:
-                f0 = f
-            else: f0 = -f 
-            if dir1 > 0:
-                f1 = f
-            else: f1 = -f
-        
-            # Normalize and scale the BCPs
-            angleBefore0 = self.pointClass(pts[0]).angle(pts[1])
-            dist0 = abs(self.pointClass(pts[0]).distance(pts[1]))
-            # norm0 = (pts[1] - pts[0]) / dist0
-            scaled0 = (pts[1] - pts[0]) * f0
-            pts[1] = pts[1] + scaled0
-            angleAfter0 = self.pointClass(pts[0]).angle(pts[1])
-            #
-            angleBefore1 = self.pointClass(pts[3]).angle(pts[2])
-            dist1 = abs(self.pointClass(pts[3]).distance(pts[2]))
-            # norm1 = (pts[3] - pts[2]) / dist1
-            scaled1 = (pts[3] - pts[2]) * f1
-            pts[2] = pts[2] + scaled1
-            angleAfter1 = self.pointClass(pts[3]).angle(pts[2])
-            
-            # Save the point locations for the next round
-            prevPts = pts.copy()
-
-            # Split at a few locations
-            splitFactors = [0.25, 0.5, 0.75]
-            # splitFactors = [0.5]
-            newSplit = splitCubicAtT(pts[0], pts[1], pts[2], pts[3], *splitFactors)
-            newSplitLocs = [self.pointClass(pts[-1]) for pts in newSplit]
-            newSplitLocs = newSplitLocs[:-1]
-        
-            # Measure these splits back to the flattened original segment
-            totalDiff = 0
-            for loc in newSplitLocs:
-                closestLoc, closestDist = self.findClosest(loc, flatPts)
-                angle = loc.angle(self.pointClass(closestLoc))
-                expectedDistance = self.getThickness(angle)
-                diff = expectedDistance - closestDist
-                totalDiff += diff
-
-            # Stop if the diff crosses zero, the previous one is close enough
-            if totalDiff < 0:
-                break
-            
-        return prevPts
-    
-    
     def findClosest(self, loc, locs):
         closest = None
         closestDist = None
@@ -595,6 +574,60 @@ class OutlineFitterPen(BasePen):
                     closest = testLoc
         return closest, closestDist
     
+    def fitCurve(self, pts, flatPts, dir0, dir1):
+        # pts is a list of four points defining a curve
+        # Use three sample points along the curve to move the BCPs in directions dir0 and dir1 
+        # until the sampled points average out to the correct distance from flatPoints
+        
+        # positive or negative factor for moving the BCPs, depending on the direction the curve is turning
+        f = 0.05
+        if dir0 > 0:
+            f0 = f
+        else: f0 = -f 
+        if dir1 > 0:
+            f1 = f
+        else: f1 = -f
+
+        closestPts = pts.copy()
+        totalPasses = 0
+        # First pass, coarse
+        while True:
+            totalPasses += 1
+            if totalPasses > 50:
+                break
+            closestPts, totalDiff = self._testCurve(closestPts, flatPts, f0, f1)
+            if totalDiff < 0:
+                # The diff crossed zero
+                break
+        
+        # Second pass, more fine and in the other direction
+        f0 *= -0.1
+        f1 *= -0.1
+        totalPasses = 0
+        while True:
+            totalPasses += 1
+            if totalPasses > 50:
+                break
+            closestPts, totalDiff = self._testCurve(closestPts, flatPts, f0, f1)
+            if totalDiff > 0:
+                # The diff crossed zero in the other direction this time
+                break
+        
+        # Third pass, more fine and in the other direction
+        f0 *= -0.1
+        f1 *= -0.1
+        totalPasses = 0
+        while True:
+            totalPasses += 1
+            if totalPasses > 50:
+                break
+            closestPts, totalDiff = self._testCurve(closestPts, flatPts, f0, f1)
+            if totalDiff < 0:
+                # The diff crossed zero
+                break
+        
+        return closestPts
+
 
     # connections
 
