@@ -245,7 +245,7 @@ class OutlineFitterPen(BasePen):
     pointClass = MathPoint
     magicCurve = 0.5522847498
 
-    def __init__(self, glyphSet, offset=10, contrast=0, contrastAngle=0, connection="square", cap="round", miterLimit=None, closeOpenPaths=True, optimizeCurve=False, preserveComponents=False, filterDoubles=True):
+    def __init__(self, glyphSet, offset=10, contrast=0, contrastAngle=0, connection="square", cap="round", miterLimit=None, closeOpenPaths=True, optimizeCurve=False, preserveComponents=False, filterDoubles=True, alwaysConnect=False):
         BasePen.__init__(self, glyphSet)
 
         self.offset = abs(offset)
@@ -288,6 +288,7 @@ class OutlineFitterPen(BasePen):
         self.components = []
 
         self.filterDoubles = filterDoubles
+        self.alwaysConnect = alwaysConnect
         self.drawSettings()
 
     def _moveTo(self, pt):
@@ -322,13 +323,13 @@ class OutlineFitterPen(BasePen):
 
         if self.shouldHandleMove:
             self.shouldHandleMove = False
-
+        
             self.innerPen.moveTo(self.innerCurrentPoint)
             self.innerFirstPoint = self.innerCurrentPoint
-
+        
             self.outerPen.moveTo(self.outerCurrentPoint)
             self.outerFirstPoint = self.outerCurrentPoint
-
+        
             self.firstAngle = self.currentAngle
         else:
             self.buildConnection()
@@ -383,13 +384,13 @@ class OutlineFitterPen(BasePen):
 
         if self.shouldHandleMove:
             self.shouldHandleMove = False
-
+        
             self.innerPen.moveTo(self.innerCurrentPoint)
             self.innerFirstPoint = self.innerPrevPoint = self.innerCurrentPoint
-
+        
             self.outerPen.moveTo(self.outerCurrentPoint)
             self.outerFirstPoint = self.outerPrevPoint = self.outerCurrentPoint
-
+        
             self.firstAngle = a1
         else:
             self.buildConnection()
@@ -538,7 +539,7 @@ class OutlineFitterPen(BasePen):
     
     # fit curve
     
-    def _testCurve(self, pts, flatPts, f0, f1):
+    def _testCurve(self, pts, flatPts, f0, f1, inRange=False):
         # Normalize and scale the BCPs
         scaled0 = (pts[1] - pts[0]) * f0
         pts[1] = pts[1] + scaled0
@@ -546,14 +547,25 @@ class OutlineFitterPen(BasePen):
         scaled1 = (pts[3] - pts[2]) * f1
         pts[2] = pts[2] + scaled1
         # Split at a few locations
-        splitFactors = [0.33, 0.5, 0.66]
+        splitFactors = [0.25, 0.5, 0.75]
         newSplit = splitCubicAtT(pts[0], pts[1], pts[2], pts[3], *splitFactors)
         newSplitLocs = [self.pointClass(pts[-1]) for pts in newSplit]
         newSplitLocs = newSplitLocs[:-1]
         # Measure these splits back to the flattened original segment
+        # Prepare chunks of the flatPts, if we should be testing inRange
+        #   ...a factor of 0.25 should only be compared against 0.2-0.3, 0.5 should be 0.45-0.55, 0.75 should be 0.7-0.8
+        totalFlats = len(flatPts)
+        flatRanges = [  (int(totalFlats*0.2), int(totalFlats*0.3)), 
+                        (int(totalFlats*0.45), int(totalFlats*0.55)), 
+                        (int(totalFlats*0.7), int(totalFlats*0.8))] # These relate directly to the factors in splitFactors
         totalDiff = 0
-        for loc in newSplitLocs:
-            closestLoc, closestDist = self.findClosest(loc, flatPts)
+        for i, loc in enumerate(newSplitLocs):
+            if inRange:
+                # If it should only check a smaller range of flat points
+                # (experimental)
+                flatPtChunk = flatPts[flatRanges[i][0]:flatRanges[i][1]]
+            else: flatPtChunk = flatPts
+            closestLoc, closestDist = self.findClosest(loc, flatPtChunk)
             angle = loc.angle(self.pointClass(closestLoc))
             expectedDistance = self.getThickness(angle)
             diff = expectedDistance - closestDist
@@ -632,16 +644,21 @@ class OutlineFitterPen(BasePen):
     # connections
 
     def buildConnection(self, close=False):
-        if not checkSmooth(self.prevAngle, self.currentAngle):
-            if checkInnerOuter(self.prevAngle, self.currentAngle):
-                self.connectionCallback(self.outerPrevPoint, self.outerCurrentPoint, self.outerPen, close)
-                self.connectionInnerCorner(self.innerPrevPoint, self.innerCurrentPoint, self.innerPen, close)
-            else:
-                self.connectionCallback(self.innerPrevPoint, self.innerCurrentPoint, self.innerPen, close)
-                self.connectionInnerCorner(self.outerPrevPoint, self.outerCurrentPoint, self.outerPen, close)
-        elif not self.filterDoubles:
-            self.innerPen.lineTo(self.innerCurrentPoint)
-            self.outerPen.lineTo(self.outerCurrentPoint)
+        if self.alwaysConnect:
+            # Always force a connection for compatibility @@@ Unused, adds too many points
+            self.connectionCallback(self.outerPrevPoint, self.outerCurrentPoint, self.outerPen, close)
+            self.connectionCallback(self.innerPrevPoint, self.innerCurrentPoint, self.innerPen, close)
+        else:
+            if not checkSmooth(self.prevAngle, self.currentAngle):
+                if checkInnerOuter(self.prevAngle, self.currentAngle):
+                    self.connectionCallback(self.outerPrevPoint, self.outerCurrentPoint, self.outerPen, close)
+                    self.connectionInnerCorner(self.innerPrevPoint, self.innerCurrentPoint, self.innerPen, close)
+                else:
+                    self.connectionCallback(self.innerPrevPoint, self.innerCurrentPoint, self.innerPen, close)
+                    self.connectionInnerCorner(self.outerPrevPoint, self.outerCurrentPoint, self.outerPen, close)
+            elif not self.filterDoubles:
+                self.innerPen.lineTo(self.innerCurrentPoint)
+                self.outerPen.lineTo(self.outerCurrentPoint)
 
     def connectionSquare(self, first, last, pen, close):
         angle_1 = radians(degrees(self.prevAngle)+90)
@@ -682,7 +699,9 @@ class OutlineFitterPen(BasePen):
 
         radius = centerPoint.distance(first)
         D = radius * (1 - cos(angle_half))
-        handleLength = (4 * D / 3) / sin(angle_half)  # length of the bcp line
+        try:
+            handleLength = (4 * D / 3) / sin(angle_half)  # length of the bcp line
+        except: handleLength = 0
 
         bcp1 = first - self.pointClass(cos(angle_1), sin(angle_1)) * handleLength
         bcp2 = last + self.pointClass(cos(angle_2), sin(angle_2)) * handleLength
@@ -758,6 +777,23 @@ class OutlineFitterPen(BasePen):
 
         p2 = last - self.pointClass(cos(angle), sin(angle)) * self.offset
         firstContour.addPoint((p2.x, p2.y), smooth=False, segmentType="line")
+
+    def capRoundsimple(self, firstContour, lastContour, first, last, angle):
+
+        angle = radians(degrees(angle) + 90)
+
+        firstContour[-1].smooth = True
+        lastContour[0].smooth = True
+
+        p1 = first - self.pointClass(cos(angle), sin(angle)) * (self.offset * 1.5)
+        firstContour.addPoint((p1.x, p1.y))
+
+        p2 = last - self.pointClass(cos(angle), sin(angle)) * (self.offset * 1.5)
+        firstContour.addPoint((p2.x, p2.y))
+
+        lastContour[0].segmentType = "curve"
+        lastContour[0].smooth = True
+        #firstContour.addPoint((last.x, last.y), smooth=True, segmentType="curve")
 
     def drawSettings(self, drawOriginal=False, drawInner=False, drawOuter=True):
         self.drawOriginal = drawOriginal
