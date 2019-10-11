@@ -413,6 +413,30 @@ class OutlineFitterPen(BasePen):
         outerPoints.append(self.outerCurrentPoint)
         
         # Determine if a curve in/out of a BCP is rotating clockwise or counterclockwise
+        # Compare vectors of the point to the bcp and the point to a split location just after/before the point
+        splits = splitCubicAtT(prevPoint, p1, p2, p3, 0.01, 0.99)
+        splitPt0 = MathPoint(splits[0][-1])
+        splitPt1 = MathPoint(splits[-1][0])
+        # vectors
+        vBcp0 = prevPoint - p1
+        vNext0 = prevPoint - splitPt0
+        vBcp1 = p3 - p2
+        vNext1 = p3 - splitPt1
+        # Find which way the vector is rotating by looking at the sign of the dot product
+        dot0 = vBcp0[0] * vNext0[1] - vBcp0[1] * vNext0[0]
+        dot1 = vBcp1[0] * vNext1[1] - vBcp1[1] * vNext1[0]
+
+        dir0 = 1
+        dir1 = 1
+        if dot0 < 0:
+            dir0 = -1
+        if dot1 < 0:
+            dir1 = -1
+            
+        """
+        # OLD TECHNIQUE:
+            
+        # Determine if a curve in/out of a BCP is rotating clockwise or counterclockwise
         # Compare vectors of the point to the bcp and the point to the next point
         vBcp0 = self.prevPoint - p1
         vNext0 = self.prevPoint - p3
@@ -431,6 +455,7 @@ class OutlineFitterPen(BasePen):
             dir0 = -1
         if dot1 < 0:
             dir1 = -1
+        """
             
         # print(dot0, dot1)
             
